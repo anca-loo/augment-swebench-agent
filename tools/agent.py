@@ -1,6 +1,7 @@
 from copy import deepcopy
 from typing import Any, Optional
 from tools.bash_tool import create_bash_tool, create_docker_bash_tool
+from tools.search import SearchTool
 from utils.common import (
     DialogMessages,
     LLMTool,
@@ -79,6 +80,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
             logger_for_agent_logs=logger_for_agent_logs,
             use_prompt_budgeting=use_prompt_budgeting,
         )
+        self.num_search_tool_calls = 0
 
         # Create and store the complete tool
         self.complete_tool = CompleteTool()
@@ -107,6 +109,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
             StrReplaceEditorTool(workspace_manager=workspace_manager),
             SequentialThinkingTool(),
             self.complete_tool,
+            SearchTool(),
         ]
 
     def run_impl(
@@ -166,6 +169,9 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     return ToolImplOutput(
                         tool_output=self.dialog.get_last_model_text_response(),
                         tool_result_message="Task completed",
+                        auxiliary_data={
+                            "num_search_tool_calls": self.num_search_tool_calls,
+                        }
                     )
 
                 if len(pending_tool_calls) > 1:

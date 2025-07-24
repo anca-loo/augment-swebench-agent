@@ -52,6 +52,7 @@ When to use this tool:
 - Breaking down complex problems into steps
 - Planning and design with room for revision
 - Analysis that might need course correction
+- Analyze the results from the search tool
 - Problems where the full scope might not be clear initially
 - Problems that require a multi-step solution
 - Tasks that need to maintain context over multiple steps
