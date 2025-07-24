@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, cast
 import subprocess
+import os
+from rich.console import Console
 
 import jsonschema
 from anthropic import BadRequestError
@@ -34,6 +36,7 @@ from utils.llm_client import (
 ToolInputSchema = dict[str, Any]
 """A JSON schema describing the input to a tool."""
 
+console = Console()
 
 RIGHT = ""  # "▶"
 LEFT = ""  # "◀"
@@ -406,7 +409,7 @@ class LLMTool:
 
     def get_tool_start_message(self, tool_input: ToolInputSchema) -> str:
         """Return a user-friendly message to be shown to the model when the tool is called."""
-        return f"Calling tool '{self.name}'"
+        return self.get_tool_start_message_impl(tool_input)
 
     def run_impl(
         self,
@@ -461,7 +464,7 @@ def call_tools(
 
 def generate_patch(git_repo, reverse=False):
     """Generate the patch for the prediction."""
-    logging.info(f"Generating patch in {git_repo}")
+    console.print(f"Generating patch in {git_repo}")
     cmd = [
         "git",
         "--no-pager",
@@ -481,13 +484,14 @@ def generate_patch(git_repo, reverse=False):
                 text=True,
                 errors="backslashreplace",
             )
+
             return diff
         except Exception as e:
             if attempt < max_retries - 1:
                 logging.warning(
                     f"Error {e} occurred. Retrying... (Attempt {attempt + 1}/{max_retries})"
                 )
-                time.sleep(5)  # Add a small delay before retrying
+                time.sleep(2)  # Add a small delay before retrying
             else:
                 logging.error(
                     f"Failed to decode git diff output after {max_retries} attempts."

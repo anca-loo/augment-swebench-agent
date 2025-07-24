@@ -28,6 +28,7 @@ from cli import main as cli_main
 import uuid
 from utils.swebench_eval_utils import get_dataset_name, run_evaluation
 
+console = Console()
 
 def run_eval_on_single_problem(problem_id: str, workspace_path: Path, console: Console):
     eval_file = None
@@ -107,7 +108,7 @@ def run_agent_on_single_problem(
         cli_args = [
             "cli.py",
             "--workspace",
-            str(workspace_path / problem_id),
+            str(workspace_path),
             "--problem-statement",
             problem_statement,
             "--docker-container-id",
@@ -135,8 +136,11 @@ def run_agent_on_single_problem(
         sys.argv = original_argv
 
         # Generate patch after the agent has completed its work
-        repo_path = str(workspace_path / problem_id)
+        repo_path = str(workspace_path)
+        console.print(f"Generating patch in {repo_path}")
         diff = generate_patch(repo_path)
+
+        
         with (workspace_path / "predictions.json").open("w") as f:
             json.dump(
                 [
@@ -144,6 +148,25 @@ def run_agent_on_single_problem(
                         "instance_id": problem_id,
                         "model_name_or_path": "augment-agent",
                         "model_patch": diff,
+                        # "search_tool_calls": self.num_search_tool_calls,
+                    }
+                ],
+                f,
+                indent=2,
+            )
+            
+        # Also save to /evals folder
+        evals_dir = Path("./evals")
+        console.print(f"Saving predictions to {evals_dir / f'{problem_id}_predictions.json'}")
+        evals_dir.mkdir(exist_ok=True, parents=True)
+        with (evals_dir / f"{problem_id}_predictions.json").open("w") as f:
+            json.dump(
+                [
+                    {
+                        "instance_id": problem_id,
+                        "model_name_or_path": "augment-agent",
+                        "model_patch": diff,
+                        # "search_tool_calls": self.num_search_tool_calls,
                     }
                 ],
                 f,
@@ -165,6 +188,21 @@ def run_agent_on_single_problem(
 
     assert diff is not None
     return diff, agent_duration, eval_outcomes
+
+
+def should_process_issue(problem_id):
+    # Check if predictions file exists in evals directory
+    console.print(f"Checking if {problem_id} should be processed")
+    evals_dir = Path("./evals")
+    prediction_file = evals_dir / f"{problem_id}_predictions.json"
+    console.print(f"Prediction file: {prediction_file}")
+    
+    # Skip if file already exists
+    if prediction_file.exists():
+        console.print(f"Skipping {problem_id} - already processed (found in /evals)")
+        return False
+    console.print(f"Processing {problem_id}")
+    return True
 
 
 def main():
@@ -256,6 +294,9 @@ def main():
 
     output_path = f"pre-ensemble_results_shard{args.shard_id}_of_{args.shard_ct}.jsonl"
 
+    # Add timing for the entire process
+    overall_start_time = time.time()
+
     # Iterate over the specified number of examples
     for i in range(num_examples):
         try:
@@ -265,34 +306,35 @@ def main():
 
             console.print(f"\nProcessing example {i + 1}/{num_examples}")
 
-            # Run the agent on the selected problem
-            with Manager() as manager:
-                lock = manager.Lock()
-                semaphore = manager.Semaphore(MAX_DOCKER_CONCURRENCY)
-                with Pool(processes=args.num_processes) as pool:
-                    diffs = pool.starmap(
-                        partial(
-                            run_agent_on_single_problem,
-                            lock=lock,
-                            semaphore=semaphore,
-                            workspace_base_path=workspace_base_path,
-                        ),
-                        [
-                            (problem_id, problem_statement, rollout_idx)
-                            for rollout_idx in range(args.num_candidate_solutions)
-                        ],
-                    )
-                    diffs, agent_durations, eval_outcomes = zip(*diffs)
-                median_duration = np.median(agent_durations)
-                diff_data = {
-                    "id": problem_id,
-                    "instruction": problem_statement,
-                    "diffs": diffs,
-                    "agent_durations": agent_durations,
-                    "median_duration": median_duration,
-                    "eval_outcomes": eval_outcomes,
-                }
-                all_diff_data.append(diff_data)
+            if should_process_issue(problem_id):
+                # Run the agent on the selected problem
+                with Manager() as manager:
+                    lock = manager.Lock()
+                    semaphore = manager.Semaphore(MAX_DOCKER_CONCURRENCY)
+                    with Pool(processes=args.num_processes) as pool:
+                        diffs = pool.starmap(
+                            partial(
+                                run_agent_on_single_problem,
+                                lock=lock,
+                                semaphore=semaphore,
+                                workspace_base_path=workspace_base_path,
+                            ),
+                            [
+                                (problem_id, problem_statement, rollout_idx)
+                                for rollout_idx in range(args.num_candidate_solutions)
+                            ],
+                        )
+                        diffs, agent_durations, eval_outcomes = zip(*diffs)
+                    median_duration = np.median(agent_durations)
+                    diff_data = {
+                        "id": problem_id,
+                        "instruction": problem_statement,
+                        "diffs": diffs,
+                        "agent_durations": agent_durations,
+                        "median_duration": median_duration,
+                        "eval_outcomes": eval_outcomes,
+                    }
+                    all_diff_data.append(diff_data)
 
                 # Save the results after each example in case of failures
                 with open(output_path, "w") as f:
@@ -315,6 +357,11 @@ def main():
 
     console.print(f"\nAll examples processed. Results saved to {output_path}")
     console.print("Done!")
+
+    # Calculate overall duration
+    overall_duration = time.time() - overall_start_time
+    console.print(f"\nTotal execution time: {overall_duration:.2f}s")
+    console.print(f"Average time per example: {overall_duration/num_examples:.2f}s")
 
     ensemble_instruction = Panel(
         f"""
